@@ -236,36 +236,6 @@ Comprehensive technical documentation is available in the `docs/` directory:
 - Thread pool: Fixed overhead, efficient work distribution
 - Enables handling hundreds of concurrent connections efficiently
 
-## Research Applications
-
-This project demonstrates several important concepts in systems programming:
-
-1. **Lock Contention Analysis:** Quantifies the impact of lock granularity on throughput
-2. **Concurrency Patterns:** Implements producer-consumer pattern with condition variables
-3. **Durability Trade-offs:** Explores the performance vs. durability spectrum
-4. **Performance Optimization:** Shows measurable improvements from architectural changes
-
-The codebase serves as a reference implementation for:
-- High-performance server design
-- Concurrency control strategies
-- Database internals (WAL, compaction, recovery)
-- Systems programming best practices
-
-## Limitations and Future Work
-
-**Current Limitations:**
-- Single-server only (no replication)
-- No transaction support
-- No authentication or authorization
-- Limited to in-memory capacity
-
-**Potential Enhancements:**
-- Distributed replication for high availability
-- Transaction support with ACID guarantees
-- Authentication and access control
-- TLS/SSL for encrypted connections
-- Custom memory allocator for reduced allocation overhead
-- NUMA-aware thread pinning for better cache locality
 
 ## License
 
