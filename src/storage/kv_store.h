@@ -9,6 +9,7 @@ public:
     ~KVStore();
     
     std::string execute(const ParsedCommand& cmd);
+    void compact();
 
 private:
     void set(const std::string& key, const std::string& value);

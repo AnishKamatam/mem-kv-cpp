@@ -2,7 +2,7 @@
 
 #include <string>
 
-enum class CommandType { SET, GET, DEL, UNKNOWN };
+enum class CommandType { SET, GET, DEL, COMPACT, UNKNOWN };
 
 struct ParsedCommand {
     CommandType type;

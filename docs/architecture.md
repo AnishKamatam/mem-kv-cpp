@@ -1,0 +1,183 @@
+# Architecture Overview
+
+This document provides a deep dive into the system architecture of the mem-kv-cpp in-memory key-value store. It explains how data flows from a client command to physical disk, and how the system achieves high performance through careful design decisions.
+
+## The Layered Model
+
+The system is organized into three distinct layers, each with a clear responsibility:
+
+### 1. Network Layer (`src/net/`)
+
+**Components:**
+- `Server`: Manages the TCP socket lifecycle (bind, listen, accept)
+- `Connection`: Handles individual client sessions
+
+**Responsibilities:**
+- Accept incoming TCP connections
+- Read raw bytes from sockets
+- Write responses back to clients
+- Manage connection lifecycle
+
+**Key Design Decision:** The `Server` uses a thread pool to distribute client connections, avoiding the overhead of spawning a new thread per connection.
+
+### 2. Protocol Layer (`src/protocol/`)
+
+**Components:**
+- `Parser`: Tokenizes incoming byte streams into structured commands
+- `Command`: Defines command types (SET, GET, DEL, COMPACT) and parsed command structures
+
+**Responsibilities:**
+- Parse both plain-text and RESP (Redis Serialization Protocol) formats
+- Validate command syntax
+- Transform raw strings into `ParsedCommand` objects
+
+**Key Design Decision:** Protocol parsing is completely decoupled from networking and storage. This allows us to add new protocols (e.g., binary protocols) without touching the storage engine.
+
+### 3. Storage Layer (`src/storage/`)
+
+**Components:**
+- `KVStore`: The main storage interface (uses PIMPL pattern)
+- `KVStore::Impl`: The actual implementation with sharded data structures
+
+**Responsibilities:**
+- Execute commands on the in-memory data structures
+- Persist writes to the Write-Ahead Log (WAL)
+- Recover state from disk on startup
+- Perform log compaction
+
+## Data Flow: From `nc` Command to Disk
+
+Let's trace what happens when a client sends `SET name Anish`:
+
+```
+1. Client: echo "SET name Anish" | nc localhost 8080
+   ↓
+2. Server::run() [Main Thread]
+   - accept() blocks until client connects
+   - Receives client_socket file descriptor
+   - Enqueues socket to ThreadPool
+   ↓
+3. ThreadPool::worker_loop() [Worker Thread]
+   - Wakes up from condition_variable wait
+   - Pops client_socket from queue
+   - Creates Connection object
+   ↓
+4. Connection::handle() [Worker Thread]
+   - recv() reads bytes: "SET name Anish\n"
+   - Calls Parser::parse() to tokenize
+   ↓
+5. Parser::parse() [Worker Thread]
+   - Creates ParsedCommand{type=SET, key="name", value="Anish"}
+   - Returns structured command object
+   ↓
+6. KVStore::execute() [Worker Thread]
+   - Dispatches to KVStore::Impl::set()
+   ↓
+7. KVStore::Impl::set() [Worker Thread]
+   - Computes shard index: hash("name") % 16 = shard_idx
+   - Acquires lock on shards[shard_idx].mtx
+   - Updates shards[shard_idx].data["name"] = "Anish"
+   - Releases shard lock
+   - Acquires journal_mtx_ lock
+   - Writes "SET name Anish\n" to journal_ stream
+   - Releases journal lock
+   ↓
+8. Background Flusher Thread [Separate Thread]
+   - Every 100ms, acquires journal_mtx_ lock
+   - Calls journal_.flush() to force OS write
+   - Releases lock
+   ↓
+9. Operating System
+   - Buffers the write in page cache
+   - Eventually syncs to physical disk
+```
+
+## Sharding Strategy
+
+The storage layer uses **sharded locking** to reduce contention:
+
+```cpp
+static constexpr size_t NUM_SHARDS = 16;
+
+struct Shard {
+    std::unordered_map<std::string, std::string> data;
+    std::mutex mtx;
+};
+
+Shard shards[NUM_SHARDS];
+```
+
+**Hash Function:**
+```cpp
+size_t get_shard_index(const std::string& key) {
+    return std::hash<std::string>{}(key) % NUM_SHARDS;
+}
+```
+
+**Why This Works:**
+- **Parallel Writes:** Two threads writing to different keys can proceed simultaneously if they hash to different shards
+- **Reduced Contention:** Instead of one global lock, we have 16 independent locks
+- **Load Distribution:** `std::hash` provides uniform distribution across shards
+
+**Example:**
+- Thread A writes `SET user_1 value` → hash("user_1") % 16 = 3 → locks shard[3]
+- Thread B writes `SET user_2 value` → hash("user_2") % 16 = 7 → locks shard[7]
+- **Result:** Both operations proceed in parallel with zero contention
+
+## Thread Lifecycle
+
+### Main Thread (Server::run())
+
+```
+while (true) {
+    client_socket = accept(server_fd, ...);  // Blocks here
+    thread_pool_->enqueue(client_socket);    // Non-blocking
+}
+```
+
+The main thread's only job is to accept connections and enqueue them. It never blocks on client I/O.
+
+### Worker Threads (ThreadPool)
+
+```
+void worker_loop() {
+    while (true) {
+        condition_variable.wait(...);  // Sleep until task available
+        socket = tasks_.front();
+        tasks_.pop();
+        handler_(socket);  // Process client connection
+    }
+}
+```
+
+**Key Benefits:**
+- **No Thread Creation Overhead:** Threads are created once at startup
+- **No Context Switching:** Threads sleep on condition_variable, not busy-wait
+- **Work Stealing:** Any idle worker can pick up the next task
+
+### Background Flusher Thread
+
+```
+void background_flush() {
+    while (running_) {
+        sleep(100ms);
+        if (!is_compacting_) {
+            journal_.flush();  // Force OS to write buffered data
+        }
+    }
+}
+```
+
+This thread ensures durability by periodically flushing the WAL to disk, trading off a small risk of data loss (last 100ms) for significantly better performance.
+
+## Performance Characteristics
+
+| Operation | Complexity | Lock Contention |
+|-----------|-----------|-----------------|
+| SET       | O(1) avg  | 1/16 shard lock |
+| GET       | O(1) avg  | 1/16 shard lock |
+| DEL       | O(1) avg  | 1/16 shard lock |
+| COMPACT   | O(n)      | All shard locks (brief) |
+
+The sharding strategy ensures that in a high-concurrency scenario, most operations can proceed in parallel without blocking each other.
+

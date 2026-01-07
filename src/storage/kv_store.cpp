@@ -8,6 +8,8 @@
 #include <thread>
 #include <atomic>
 #include <chrono>
+#include <cerrno>
+#include <cstring>
 
 struct Shard {
     std::unordered_map<std::string, std::string> data;
@@ -19,11 +21,14 @@ public:
     static constexpr size_t NUM_SHARDS = 16;
     Shard shards[NUM_SHARDS];
     std::ofstream journal_;
-    std::mutex journal_mtx_; // Protect journal writes
+    std::mutex journal_mtx_;
     std::atomic<bool> running_{true};
+    std::atomic<bool> is_compacting_{false};
     std::thread flusher_thread_;
+    std::string journal_path_;
+    static constexpr size_t COMPACTION_THRESHOLD = 100 * 1024 * 1024;
     
-    Impl(const std::string& filename) {
+    Impl(const std::string& filename) : journal_path_(filename) {
         std::filesystem::path file_path(filename);
         std::filesystem::path dir_path = file_path.parent_path();
         if (!dir_path.empty() && !std::filesystem::exists(dir_path)) {
@@ -37,11 +42,30 @@ public:
         }
         
         flusher_thread_ = std::thread([this]() {
+            auto last_compaction_check = std::chrono::steady_clock::now();
+            
             while (running_) {
                 std::this_thread::sleep_for(std::chrono::milliseconds(100));
-                std::lock_guard<std::mutex> lock(journal_mtx_);
-                if (journal_.is_open()) {
-                    journal_.flush();
+                
+                if (is_compacting_) continue;
+                
+                {
+                    std::lock_guard<std::mutex> lock(journal_mtx_);
+                    if (journal_.is_open()) {
+                        journal_.flush();
+                    }
+                }
+                
+                auto now = std::chrono::steady_clock::now();
+                if (std::chrono::duration_cast<std::chrono::seconds>(now - last_compaction_check).count() >= 60) {
+                    last_compaction_check = now;
+                    
+                    if (std::filesystem::exists(journal_path_)) {
+                        size_t file_size = std::filesystem::file_size(journal_path_);
+                        if (file_size > COMPACTION_THRESHOLD) {
+                            compact();
+                        }
+                    }
                 }
             }
         });
@@ -129,12 +153,70 @@ public:
         
         return existed;
     }
+    
+    void compact() {
+        std::cout << "[Compaction] Starting..." << std::endl;
+        is_compacting_ = true;
+        
+        std::string temp_filename = journal_path_ + ".tmp";
+        std::cout << "[Compaction] Temp file: " << temp_filename << std::endl;
+        
+        size_t total_keys = 0;
+        {
+            std::ofstream temp_journal(temp_filename, std::ios::trunc);
+            if (!temp_journal.is_open()) {
+                std::cerr << "[Compaction] ERROR: Could not open temp file" << std::endl;
+                is_compacting_ = false;
+                return;
+            }
+            
+            for (size_t i = 0; i < NUM_SHARDS; ++i) {
+                std::lock_guard<std::mutex> lock(shards[i].mtx);
+                
+                for (const auto& [key, value] : shards[i].data) {
+                    temp_journal << "SET " << key << " " << value << "\n";
+                    total_keys++;
+                }
+            }
+            
+            temp_journal.close();
+        }
+        
+        std::cout << "[Compaction] Snapshot created with " << total_keys << " keys" << std::endl;
+        
+        {
+            std::lock_guard<std::mutex> lock(journal_mtx_);
+            
+            if (journal_.is_open()) {
+                journal_.close();
+                std::cout << "[Compaction] Journal closed" << std::endl;
+            }
+            
+            if (std::rename(temp_filename.c_str(), journal_path_.c_str()) != 0) {
+                std::cerr << "[Compaction] RENAME ERROR: " << strerror(errno) << std::endl;
+            } else {
+                std::cout << "[Compaction] COMPACTION SUCCESS" << std::endl;
+            }
+            
+            journal_.open(journal_path_, std::ios::app);
+            if (!journal_.is_open()) {
+                std::cerr << "[Compaction] ERROR: Could not reopen journal" << std::endl;
+            }
+        }
+        
+        is_compacting_ = false;
+        std::cout << "[Compaction] Complete" << std::endl;
+    }
 };
 
 KVStore::KVStore(const std::string& filename) : filename_(filename), impl_(new Impl(filename)) {}
 
 KVStore::~KVStore() {
     delete impl_;
+}
+
+void KVStore::compact() {
+    impl_->compact();
 }
 
 std::string KVStore::execute(const ParsedCommand& cmd) {
@@ -152,6 +234,10 @@ std::string KVStore::execute(const ParsedCommand& cmd) {
             
         case CommandType::DEL:
             impl_->del(cmd.key);
+            return "OK\n";
+            
+        case CommandType::COMPACT:
+            impl_->compact();
             return "OK\n";
             
         default:

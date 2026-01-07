@@ -35,7 +35,10 @@ ParsedCommand Parser::parse_plain_text(const std::string& input) {
     else if (cmd_name == "DEL") {
         cmd.type = CommandType::DEL;
         ss >> cmd.key;
-    } 
+    }
+    else if (cmd_name == "COMPACT") {
+        cmd.type = CommandType::COMPACT;
+    }
     else {
         cmd.type = CommandType::UNKNOWN;
         cmd.valid = false;
@@ -103,6 +106,10 @@ ParsedCommand Parser::parse_resp(const std::string& input) {
         int key_len = std::stoi(line.substr(1));
         cmd.key.resize(key_len);
         ss.read(&cmd.key[0], key_len);
+        cmd.valid = true;
+    }
+    else if (cmd_name == "COMPACT" && array_len == 1) {
+        cmd.type = CommandType::COMPACT;
         cmd.valid = true;
     }
     else {
