@@ -6,8 +6,13 @@
 #include <unistd.h>
 #include <thread>
 
-Server::Server(int port, KVStore& store) 
-    : port_(port), server_fd_(-1), store_(store) {}
+Server::Server(int port, KVStore& store, size_t num_threads) 
+    : port_(port), server_fd_(-1), store_(store) {
+    thread_pool_ = std::make_unique<ThreadPool>(num_threads, [this](int client_socket) {
+        Connection conn(client_socket, store_);
+        conn.handle();
+    });
+}
 
 void Server::run() {
     server_fd_ = socket(AF_INET, SOCK_STREAM, 0);
@@ -16,7 +21,6 @@ void Server::run() {
         return;
     }
 
-    // Allow port reuse to avoid "Address already in use" errors
     int opt = 1;
     if (setsockopt(server_fd_, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt)) < 0) {
         perror("Setsockopt failed");
@@ -35,7 +39,7 @@ void Server::run() {
         return;
     }
 
-    if (listen(server_fd_, BACKLOG) < 0) {
+    if (listen(server_fd_, SOMAXCONN) < 0) {
         perror("Listen failed");
         close(server_fd_);
         return;
@@ -50,14 +54,7 @@ void Server::run() {
         int client_socket = accept(server_fd_, reinterpret_cast<sockaddr*>(&address), &addrlen);
         
         if (client_socket >= 0) {
-            std::cout << "New client connected. Spawning thread..." << std::endl;
-            
-            std::thread t([this, client_socket]() {
-                Connection conn(client_socket, store_);
-                conn.handle();
-            });
-            
-            t.detach();
+            thread_pool_->enqueue(client_socket);
         } else {
             perror("Accept failed");
         }

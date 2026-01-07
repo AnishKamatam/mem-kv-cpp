@@ -15,7 +15,6 @@ void Connection::handle() {
         
         ssize_t bytes = recv(sock_fd_, buffer, BUFFER_SIZE - 1, 0);
         if (bytes <= 0) {
-            // bytes_received == 0 indicates graceful disconnect
             std::cout << "Client disconnected." << std::endl;
             break;
         }

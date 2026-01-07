@@ -5,15 +5,25 @@
 #include <sstream>
 #include <iostream>
 #include <filesystem>
+#include <thread>
+#include <atomic>
+#include <chrono>
+
+struct Shard {
+    std::unordered_map<std::string, std::string> data;
+    std::mutex mtx;
+};
 
 class KVStore::Impl {
 public:
-    std::unordered_map<std::string, std::string> data_;
-    std::mutex mtx_;
+    static constexpr size_t NUM_SHARDS = 16;
+    Shard shards[NUM_SHARDS];
     std::ofstream journal_;
+    std::mutex journal_mtx_; // Protect journal writes
+    std::atomic<bool> running_{true};
+    std::thread flusher_thread_;
     
     Impl(const std::string& filename) {
-        // Create directory if it doesn't exist
         std::filesystem::path file_path(filename);
         std::filesystem::path dir_path = file_path.parent_path();
         if (!dir_path.empty() && !std::filesystem::exists(dir_path)) {
@@ -25,12 +35,32 @@ public:
         if (!journal_.is_open()) {
             std::cerr << "Warning: Could not open journal file: " << filename << std::endl;
         }
+        
+        flusher_thread_ = std::thread([this]() {
+            while (running_) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(100));
+                std::lock_guard<std::mutex> lock(journal_mtx_);
+                if (journal_.is_open()) {
+                    journal_.flush();
+                }
+            }
+        });
     }
     
     ~Impl() {
+        running_ = false;
+        if (flusher_thread_.joinable()) {
+            flusher_thread_.join();
+        }
+        
         if (journal_.is_open()) {
+            journal_.flush();
             journal_.close();
         }
+    }
+    
+    size_t get_shard_index(const std::string& key) {
+        return std::hash<std::string>{}(key) % NUM_SHARDS;
     }
     
     void load_from_disk(const std::string& filename) {
@@ -52,41 +82,49 @@ public:
                 ss >> key;
                 std::getline(ss >> std::ws, value);
                 if (!key.empty()) {
-                    data_[key] = value;
+                    size_t idx = get_shard_index(key);
+                    shards[idx].data[key] = value;
                 }
             } 
             else if (cmd == "DEL") {
                 std::string key;
                 ss >> key;
                 if (!key.empty()) {
-                    data_.erase(key);
+                    size_t idx = get_shard_index(key);
+                    shards[idx].data.erase(key);
                 }
             }
         }
     }
     
     void set(const std::string& key, const std::string& value) {
-        std::lock_guard<std::mutex> lock(mtx_);
-        data_[key] = value;
+        size_t idx = get_shard_index(key);
+        std::lock_guard<std::mutex> lock(shards[idx].mtx);
+        
+        shards[idx].data[key] = value;
         
         if (journal_.is_open()) {
+            std::lock_guard<std::mutex> journal_lock(journal_mtx_);
             journal_ << "SET " << key << " " << value << "\n";
-            journal_.flush();
         }
     }
     
     std::string get(const std::string& key) {
-        std::lock_guard<std::mutex> lock(mtx_);
-        return data_.count(key) ? data_[key] : "(nil)";
+        size_t idx = get_shard_index(key);
+        std::lock_guard<std::mutex> lock(shards[idx].mtx);
+        
+        auto it = shards[idx].data.find(key);
+        return (it != shards[idx].data.end()) ? it->second : "(nil)";
     }
     
     bool del(const std::string& key) {
-        std::lock_guard<std::mutex> lock(mtx_);
-        bool existed = data_.erase(key) > 0;
+        size_t idx = get_shard_index(key);
+        std::lock_guard<std::mutex> lock(shards[idx].mtx);
+        bool existed = shards[idx].data.erase(key) > 0;
         
         if (journal_.is_open() && existed) {
+            std::lock_guard<std::mutex> journal_lock(journal_mtx_);
             journal_ << "DEL " << key << "\n";
-            journal_.flush();
         }
         
         return existed;
