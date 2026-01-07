@@ -90,7 +90,7 @@ We use a custom C++ benchmarking tool (`src/tools/benchmark.cpp`) that:
 | 100     | 2,000          | 200,000        | 1.27     | ~157,303 |
 
 **Analysis:**
-- **Performance:** Consistent ~79k RPS
+- **Performance:** Consistent ~162,000 RPS
 - **Latency:** P99 latency < 1ms for localhost
 - **Durability Trade-off:** Up to 100ms of writes may be lost on crash
 
@@ -128,7 +128,7 @@ We use a custom C++ benchmarking tool (`src/tools/benchmark.cpp`) that:
 - Synchronous flushing: Each write waits for disk I/O (~1-10ms)
 - Async flushing: Writes are batched, reducing system call overhead
 
-**Trade-off:** Slight reduction in peak RPS (~79k vs ~95k) but much better real-world performance due to reduced latency variance.
+**Trade-off:** Async flushing enables higher throughput (~162k vs ~95k) while maintaining better real-world performance due to reduced latency variance.
 
 ## Latency Analysis
 
@@ -230,8 +230,8 @@ The mem-kv-cpp server achieves **~162,000 RPS** through:
 
 **Final Metrics:**
 - **Throughput:** ~162,000 RPS
-- **P99 Latency:** <20 microseconds
-- **Consistency:** P99 < 10μs
+- **P99 Latency:** <1ms (as shown in latency table above)
+- **Consistency:** P99 < 1ms
 - **Efficiency:** Batch-optimized I/O with 50x reduction in system calls
 
 This demonstrates that careful concurrency design combined with ML-specific optimizations can yield dramatic performance improvements, achieving 162% of Redis performance for write-heavy workloads while providing specialized features for ML infrastructure.

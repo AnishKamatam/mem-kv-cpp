@@ -4,7 +4,7 @@ This document provides a deep dive into the system architecture of the mem-kv-cp
 
 ## The Layered Model
 
-The system is organized into three distinct layers, each with a clear responsibility:
+The system is organized into multiple layers, each with a clear responsibility:
 
 ### 1. Network Layer (`src/net/`)
 

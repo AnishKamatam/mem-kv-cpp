@@ -217,8 +217,8 @@ std::vector<std::string> mget(const std::vector<std::string>& keys) {
 ### Throughput Metrics
 
 **Write Performance:**
-- **Peak Throughput:** ~96,000 requests/second
-- **With Batching:** 2-5x improvement for write-heavy workloads
+- **Peak Throughput:** ~162,000 requests/second (with batching)
+- **Sharded-only (no batching):** ~95,000 requests/second
 - **Batch Efficiency:** ~42-50 writes per batch
 
 **Read Performance:**
@@ -308,8 +308,8 @@ The mem-kv-cpp system provides production-grade infrastructure for ML workloads 
 4. **MGET Optimization:** Reduces feature retrieval latency by 10-20x
 
 **Final Metrics:**
-- **Throughput:** ~96,000 RPS
-- **Consistency:** P99 < 10μs
+- **Throughput:** ~162,000 RPS
+- **Consistency:** P99 < 10ms
 - **Efficiency:** Batch-optimized I/O with 50x reduction in system calls
 - **ML-Ready:** Complete observability and optimization for production ML systems
 

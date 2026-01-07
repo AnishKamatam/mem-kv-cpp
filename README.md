@@ -20,8 +20,8 @@ Tested on Apple Silicon (8-core M-series processor) with localhost networking:
 
 **Key Metrics:**
 - **Peak Throughput:** ~162,000 requests per second
-- **P99 Latency:** <10 microseconds (sub-millisecond)
-- **P50 Latency:** <1 microsecond
+- **P99 Latency:** <1ms (sub-millisecond)
+- **P50 Latency:** <0.1ms
 - **Concurrency:** Handles 100+ simultaneous client connections efficiently
 - **Scalability:** Scales with available CPU cores under typical workloads
 - **ML Features:** TTL caching, micro-batching, MGET, latency histograms
@@ -41,7 +41,7 @@ The transition from a global mutex to sharded mutexes reduced lock contention by
 
 ### Layered Design
 
-The system is organized into three distinct layers:
+The system is organized into multiple layers:
 
 **Network Layer (`src/net/`)**
 - Manages TCP socket lifecycle (bind, listen, accept)
