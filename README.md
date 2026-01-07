@@ -1,6 +1,6 @@
 # mem-kv-cpp
 
-A high-performance, ML-optimized in-memory key-value store implemented in C++17. This project demonstrates advanced systems programming techniques optimized for real-time ML inference workloads, including TTL caching, micro-batching, latency histograms, and sharded concurrency control.
+A high-performance, ML-optimized in-memory key-value store implemented in C++17. Designed for real-time ML inference workloads with TTL caching, micro-batching, latency histograms, and sharded concurrency control.
 
 ## Overview
 
