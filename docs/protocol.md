@@ -10,16 +10,17 @@ The server accepts commands over TCP on port 8080 (configurable). Each command i
 
 ### SET
 
-**Purpose:** Store a key-value pair in the database.
+**Purpose:** Store a key-value pair in the database. Supports optional TTL for ML inference caching.
 
 **Plain-Text Format:**
 ```
-SET <key> <value>\n
+SET <key> <value> [EX <seconds>]\n
 ```
 
 **RESP Format:**
 ```
 *3\r\n$3\r\nSET\r\n$<key_len>\r\n<key>\r\n$<value_len>\r\n<value>\r\n
+*4\r\n$3\r\nSET\r\n$<key_len>\r\n<key>\r\n$<value_len>\r\n<value>\r\n$2\r\nEX\r\n$<ttl>\r\n<seconds>\r\n
 ```
 
 **Response:**
@@ -31,14 +32,22 @@ OK\n
 ```bash
 $ echo "SET name Anish" | nc localhost 8080
 OK
+
+$ echo "SET model:user:123 prediction EX 3600" | nc localhost 8080
+OK
 ```
 
 **Behavior:**
 - If the key already exists, the value is overwritten
 - Keys and values are stored as strings
+- TTL (Time-To-Live) specified in seconds (e.g., `EX 3600` = 1 hour)
+- Entries with TTL expire automatically after specified time
 - No size limit (subject to available memory)
+- Write operations are batched for performance (immediate "OK" response)
 
 **Time Complexity:** O(1) average
+
+**ML Use Case:** Cache ML inference results with expiration to reduce GPU compute costs.
 
 ---
 
@@ -121,6 +130,94 @@ $ echo "GET name" | nc localhost 8080
 
 ---
 
+### MGET
+
+**Purpose:** Retrieve multiple values in a single request. Optimized for ML feature vector retrieval.
+
+**Plain-Text Format:**
+```
+MGET <key1> <key2> <key3> ...\n
+```
+
+**RESP Format:**
+```
+*<n+1>\r\n$4\r\nMGET\r\n$<key1_len>\r\n<key1>\r\n$<key2_len>\r\n<key2>\r\n...
+```
+
+**Response:**
+```
+<value1> <value2> <value3> ...\n
+```
+
+**Example:**
+```bash
+$ echo "SET user:age 25" | nc localhost 8080
+OK
+$ echo "SET user:location NYC" | nc localhost 8080
+OK
+$ echo "MGET user:age user:location user:preferences" | nc localhost 8080
+25 NYC (nil)
+```
+
+**Behavior:**
+- Returns values in the same order as requested keys
+- Returns `(nil)` for missing or expired keys
+- Shard-aware: Groups keys by shard to minimize lock acquisitions
+- Latency tracked in metrics histogram
+
+**Time Complexity:** O(k) where k = number of keys
+
+**ML Use Case:** Retrieve multiple user features for model inference in a single network round-trip.
+
+### STATS
+
+**Purpose:** Get performance metrics and latency histograms for ML observability.
+
+**Plain-Text Format:**
+```
+STATS\n
+```
+
+**Response:**
+```json
+{
+  "cache_hits": 850,
+  "cache_misses": 150,
+  "total_requests": 1000,
+  "hit_rate": 85.0,
+  "avg_latency_us": 1250.5,
+  "p50_latency_us": 800,
+  "p95_latency_us": 3500,
+  "p99_latency_us": 8500,
+  "p50_less_than_1ms": 920,
+  "p99_tail_events": 5,
+  "batch_avg_size": 42.5,
+  "histogram": {
+    "<1ms": 920,
+    "<5ms": 50,
+    "<10ms": 20,
+    "<50ms": 5,
+    "<100ms": 2,
+    ">=100ms": 3
+  }
+}
+```
+
+**Example:**
+```bash
+$ echo "STATS" | nc localhost 8080
+{"cache_hits":100,"cache_misses":0,"total_requests":100,...}
+```
+
+**Behavior:**
+- Returns JSON-formatted metrics
+- Includes cache hit/miss rates
+- Provides latency percentiles (P50, P95, P99)
+- Shows histogram distribution
+- Tracks batch statistics
+
+**ML Use Case:** Monitor cache performance and ensure SLA compliance (P99 < 10ms).
+
 ### COMPACT
 
 **Purpose:** Trigger log compaction to reduce WAL file size.
@@ -150,6 +247,7 @@ OK
 - Creates a snapshot of current database state
 - Atomically replaces the WAL file with the compacted version
 - Removes duplicate entries (keeps only latest value per key)
+- Skips expired TTL entries during compaction
 - Blocks briefly while creating snapshot (locks all shards)
 
 **Time Complexity:** O(n) where n = number of unique keys

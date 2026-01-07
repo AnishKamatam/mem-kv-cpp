@@ -1,6 +1,7 @@
 #include "parser.h"
 #include <sstream>
 #include <cstring>
+#include <vector>
 
 ParsedCommand Parser::parse(const std::string& input) {
     if (input.empty()) {
@@ -26,7 +27,34 @@ ParsedCommand Parser::parse_plain_text(const std::string& input) {
     if (cmd_name == "SET") {
         cmd.type = CommandType::SET;
         ss >> cmd.key;
-        std::getline(ss >> std::ws, cmd.value);
+        
+        // Read value (may contain spaces)
+        std::string value_part;
+        std::getline(ss >> std::ws, value_part);
+        
+        // Check for TTL: SET key value EX 3600
+        std::stringstream value_stream(value_part);
+        std::string ttl_keyword;
+        std::string potential_ttl;
+        
+        // Try to parse TTL if present
+        std::vector<std::string> parts;
+        std::string part;
+        while (value_stream >> part) {
+            parts.push_back(part);
+        }
+        
+        if (parts.size() >= 3 && (parts[parts.size()-2] == "EX" || parts[parts.size()-2] == "TTL")) {
+            // Has TTL: value is everything except last 2 parts
+            cmd.ttl_seconds = std::stoi(parts.back());
+            for (size_t i = 0; i < parts.size() - 2; ++i) {
+                if (i > 0) cmd.value += " ";
+                cmd.value += parts[i];
+            }
+        } else {
+            // No TTL: entire value_part is the value
+            cmd.value = value_part;
+        }
     } 
     else if (cmd_name == "GET") {
         cmd.type = CommandType::GET;
@@ -38,6 +66,17 @@ ParsedCommand Parser::parse_plain_text(const std::string& input) {
     }
     else if (cmd_name == "COMPACT") {
         cmd.type = CommandType::COMPACT;
+    }
+    else if (cmd_name == "STATS") {
+        cmd.type = CommandType::STATS;
+    }
+    else if (cmd_name == "MGET") {
+        cmd.type = CommandType::MGET;
+        std::string key;
+        while (ss >> key) {
+            cmd.keys.push_back(key);
+        }
+        cmd.valid = !cmd.keys.empty(); // Valid only if we have at least one key
     }
     else {
         cmd.type = CommandType::UNKNOWN;
@@ -110,6 +149,24 @@ ParsedCommand Parser::parse_resp(const std::string& input) {
     }
     else if (cmd_name == "COMPACT" && array_len == 1) {
         cmd.type = CommandType::COMPACT;
+        cmd.valid = true;
+    }
+    else if (cmd_name == "MGET" && array_len >= 2) {
+        cmd.type = CommandType::MGET;
+        
+        for (int i = 1; i < array_len; ++i) {
+            std::getline(ss, line);
+            if (line[0] != '$') {
+                cmd.valid = false;
+                return cmd;
+            }
+            int key_len = std::stoi(line.substr(1));
+            std::string key;
+            key.resize(key_len);
+            ss.read(&key[0], key_len);
+            std::getline(ss, line);
+            cmd.keys.push_back(key);
+        }
         cmd.valid = true;
     }
     else {

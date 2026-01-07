@@ -1,4 +1,6 @@
 #include "kv_store.h"
+#include "../metrics/metrics.h"
+#include "../protocol/parser.h"
 #include <unordered_map>
 #include <mutex>
 #include <fstream>
@@ -11,8 +13,20 @@
 #include <cerrno>
 #include <cstring>
 
+struct CacheEntry {
+    std::string value;
+    long long expiry_at_ms = 0; // Unix timestamp in ms. 0 = permanent.
+    
+    bool is_expired() const {
+        if (expiry_at_ms == 0) return false;
+        auto now = std::chrono::system_clock::now().time_since_epoch();
+        auto now_ms = std::chrono::duration_cast<std::chrono::milliseconds>(now).count();
+        return now_ms > expiry_at_ms;
+    }
+};
+
 struct Shard {
-    std::unordered_map<std::string, std::string> data;
+    std::unordered_map<std::string, CacheEntry> data;
     std::mutex mtx;
 };
 
@@ -97,48 +111,145 @@ public:
         while (std::getline(file, line)) {
             if (line.empty()) continue;
             
-            std::stringstream ss(line);
-            std::string cmd;
-            ss >> cmd;
+            ParsedCommand cmd = Parser::parse(line);
             
-            if (cmd == "SET") {
-                std::string key, value;
-                ss >> key;
-                std::getline(ss >> std::ws, value);
-                if (!key.empty()) {
-                    size_t idx = get_shard_index(key);
-                    shards[idx].data[key] = value;
+            if (cmd.type == CommandType::SET) {
+                size_t idx = get_shard_index(cmd.key);
+                std::lock_guard<std::mutex> lock(shards[idx].mtx);
+                
+                CacheEntry entry;
+                entry.value = cmd.value;
+                if (cmd.ttl_seconds > 0) {
+                    // On load, expired entries will be evicted on first access
+                    auto now = std::chrono::system_clock::now().time_since_epoch();
+                    auto now_ms = std::chrono::duration_cast<std::chrono::milliseconds>(now).count();
+                    entry.expiry_at_ms = now_ms + (cmd.ttl_seconds * 1000LL);
+                } else {
+                    entry.expiry_at_ms = 0;
                 }
-            } 
-            else if (cmd == "DEL") {
-                std::string key;
-                ss >> key;
-                if (!key.empty()) {
-                    size_t idx = get_shard_index(key);
-                    shards[idx].data.erase(key);
-                }
+                
+                shards[idx].data[cmd.key] = entry;
+            }
+            else if (cmd.type == CommandType::DEL) {
+                size_t idx = get_shard_index(cmd.key);
+                std::lock_guard<std::mutex> lock(shards[idx].mtx);
+                shards[idx].data.erase(cmd.key);
             }
         }
     }
     
-    void set(const std::string& key, const std::string& value) {
+    void set(const std::string& key, const std::string& value, int ttl_seconds = 0) {
         size_t idx = get_shard_index(key);
         std::lock_guard<std::mutex> lock(shards[idx].mtx);
         
-        shards[idx].data[key] = value;
+        CacheEntry entry;
+        entry.value = value;
+        
+        if (ttl_seconds > 0) {
+            auto now = std::chrono::system_clock::now().time_since_epoch();
+            auto now_ms = std::chrono::duration_cast<std::chrono::milliseconds>(now).count();
+            entry.expiry_at_ms = now_ms + (ttl_seconds * 1000LL);
+        } else {
+            entry.expiry_at_ms = 0; // Permanent
+        }
+        
+        shards[idx].data[key] = entry;
         
         if (journal_.is_open()) {
             std::lock_guard<std::mutex> journal_lock(journal_mtx_);
-            journal_ << "SET " << key << " " << value << "\n";
+            journal_ << "SET " << key << " " << value;
+            if (ttl_seconds > 0) {
+                journal_ << " EX " << ttl_seconds;
+            }
+            journal_ << "\n";
         }
     }
     
     std::string get(const std::string& key) {
+        auto start = std::chrono::high_resolution_clock::now();
+        
         size_t idx = get_shard_index(key);
         std::lock_guard<std::mutex> lock(shards[idx].mtx);
         
+        Metrics::instance().total_requests++;
+        
         auto it = shards[idx].data.find(key);
-        return (it != shards[idx].data.end()) ? it->second : "(nil)";
+        if (it == shards[idx].data.end()) {
+            Metrics::instance().cache_misses++;
+            
+            auto end = std::chrono::high_resolution_clock::now();
+            auto duration = std::chrono::duration_cast<std::chrono::microseconds>(end - start);
+            Metrics::instance().record_latency(duration.count());
+            
+            return "(nil)";
+        }
+        
+        // TTL Eviction Logic for Inference Results
+        if (it->second.is_expired()) {
+            shards[idx].data.erase(it); // Lazy eviction
+            Metrics::instance().cache_misses++;
+            
+            auto end = std::chrono::high_resolution_clock::now();
+            auto duration = std::chrono::duration_cast<std::chrono::microseconds>(end - start);
+            Metrics::instance().record_latency(duration.count());
+            
+            return "(nil)";
+        }
+        
+        Metrics::instance().cache_hits++;
+        
+        auto end = std::chrono::high_resolution_clock::now();
+        auto duration = std::chrono::duration_cast<std::chrono::microseconds>(end - start);
+        Metrics::instance().record_latency(duration.count());
+        
+        return it->second.value;
+    }
+    
+    std::vector<std::string> mget(const std::vector<std::string>& keys) {
+        auto start = std::chrono::high_resolution_clock::now();
+        
+        std::vector<std::string> results;
+        results.reserve(keys.size());
+        
+        // Group keys by shard to minimize lock acquisitions, but preserve order
+        std::unordered_map<size_t, std::vector<size_t>> shard_to_indices;
+        std::vector<size_t> shard_order;
+        
+        for (size_t i = 0; i < keys.size(); ++i) {
+            size_t idx = get_shard_index(keys[i]);
+            if (shard_to_indices.find(idx) == shard_to_indices.end()) {
+                shard_order.push_back(idx);
+            }
+            shard_to_indices[idx].push_back(i);
+        }
+        
+        // Pre-allocate results
+        results.resize(keys.size());
+        
+        // Process each shard group (in order of first appearance)
+        for (size_t shard_idx : shard_order) {
+            std::lock_guard<std::mutex> lock(shards[shard_idx].mtx);
+            
+            for (size_t key_idx : shard_to_indices[shard_idx]) {
+                const auto& key = keys[key_idx];
+                auto it = shards[shard_idx].data.find(key);
+                if (it == shards[shard_idx].data.end()) {
+                    results[key_idx] = "(nil)";
+                } else if (it->second.is_expired()) {
+                    shards[shard_idx].data.erase(it);
+                    results[key_idx] = "(nil)";
+                } else {
+                    results[key_idx] = it->second.value;
+                }
+            }
+        }
+        
+        // Record latency for MGET
+        auto end = std::chrono::high_resolution_clock::now();
+        auto duration = std::chrono::duration_cast<std::chrono::microseconds>(end - start);
+        Metrics::instance().record_latency(duration.count());
+        
+        return results;
     }
     
     bool del(const std::string& key) {
@@ -155,17 +266,14 @@ public:
     }
     
     void compact() {
-        std::cout << "[Compaction] Starting..." << std::endl;
         is_compacting_ = true;
         
         std::string temp_filename = journal_path_ + ".tmp";
-        std::cout << "[Compaction] Temp file: " << temp_filename << std::endl;
         
-        size_t total_keys = 0;
         {
             std::ofstream temp_journal(temp_filename, std::ios::trunc);
             if (!temp_journal.is_open()) {
-                std::cerr << "[Compaction] ERROR: Could not open temp file" << std::endl;
+                std::cerr << "Warning: Could not open temp file for compaction" << std::endl;
                 is_compacting_ = false;
                 return;
             }
@@ -173,39 +281,34 @@ public:
             for (size_t i = 0; i < NUM_SHARDS; ++i) {
                 std::lock_guard<std::mutex> lock(shards[i].mtx);
                 
-                for (const auto& [key, value] : shards[i].data) {
-                    temp_journal << "SET " << key << " " << value << "\n";
-                    total_keys++;
+                for (const auto& [key, entry] : shards[i].data) {
+                    if (!entry.is_expired()) {
+                        temp_journal << "SET " << key << " " << entry.value << "\n";
+                    }
                 }
             }
             
             temp_journal.close();
         }
         
-        std::cout << "[Compaction] Snapshot created with " << total_keys << " keys" << std::endl;
-        
         {
             std::lock_guard<std::mutex> lock(journal_mtx_);
             
             if (journal_.is_open()) {
                 journal_.close();
-                std::cout << "[Compaction] Journal closed" << std::endl;
             }
             
             if (std::rename(temp_filename.c_str(), journal_path_.c_str()) != 0) {
-                std::cerr << "[Compaction] RENAME ERROR: " << strerror(errno) << std::endl;
-            } else {
-                std::cout << "[Compaction] COMPACTION SUCCESS" << std::endl;
+                std::cerr << "Warning: Failed to rename temp journal during compaction: " << strerror(errno) << std::endl;
             }
             
             journal_.open(journal_path_, std::ios::app);
             if (!journal_.is_open()) {
-                std::cerr << "[Compaction] ERROR: Could not reopen journal" << std::endl;
+                std::cerr << "Warning: Could not reopen journal after compaction" << std::endl;
             }
         }
         
         is_compacting_ = false;
-        std::cout << "[Compaction] Complete" << std::endl;
     }
 };
 
@@ -219,6 +322,10 @@ void KVStore::compact() {
     impl_->compact();
 }
 
+std::vector<std::string> KVStore::mget(const std::vector<std::string>& keys) {
+    return impl_->mget(keys);
+}
+
 std::string KVStore::execute(const ParsedCommand& cmd) {
     if (!cmd.valid) {
         return "ERROR: Unknown command\n";
@@ -226,11 +333,21 @@ std::string KVStore::execute(const ParsedCommand& cmd) {
     
     switch (cmd.type) {
         case CommandType::SET:
-            impl_->set(cmd.key, cmd.value);
+            impl_->set(cmd.key, cmd.value, cmd.ttl_seconds);
             return "OK\n";
             
         case CommandType::GET:
             return impl_->get(cmd.key) + "\n";
+            
+        case CommandType::MGET: {
+            auto results = impl_->mget(cmd.keys);
+            std::string response;
+            for (size_t i = 0; i < results.size(); ++i) {
+                if (i > 0) response += " ";
+                response += results[i];
+            }
+            return response + "\n";
+        }
             
         case CommandType::DEL:
             impl_->del(cmd.key);
@@ -239,6 +356,9 @@ std::string KVStore::execute(const ParsedCommand& cmd) {
         case CommandType::COMPACT:
             impl_->compact();
             return "OK\n";
+            
+        case CommandType::STATS:
+            return Metrics::instance().to_json() + "\n";
             
         default:
             return "ERROR: Unknown command\n";

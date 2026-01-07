@@ -23,12 +23,12 @@ class KVStore::Impl {
 **File Format:**
 ```
 SET key1 value1
-SET key2 value2
+SET key2 value2 EX 3600
 DEL key1
 SET key3 value3
 ```
 
-Each line represents a single write operation. The format is simple and human-readable for debugging.
+Each line represents a single write operation. TTL information is preserved in the format `SET key value EX <seconds>` for ML cache entries. The format is simple and human-readable for debugging.
 
 ## Write Path
 

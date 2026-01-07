@@ -8,8 +8,10 @@
 
 Server::Server(int port, KVStore& store, size_t num_threads) 
     : port_(port), server_fd_(-1), store_(store) {
+    batcher_ = std::make_unique<WriteBatcher>(store);
+    
     thread_pool_ = std::make_unique<ThreadPool>(num_threads, [this](int client_socket) {
-        Connection conn(client_socket, store_);
+        Connection conn(client_socket, store_, *batcher_);
         conn.handle();
     });
 }

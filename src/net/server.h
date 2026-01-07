@@ -2,6 +2,7 @@
 
 #include "../storage/kv_store.h"
 #include "../concurrency/thread_pool.h"
+#include "../batching/write_batcher.h"
 #include <memory>
 
 class Server {
@@ -13,6 +14,7 @@ private:
     int server_fd_;
     int port_;
     KVStore& store_;
+    std::unique_ptr<WriteBatcher> batcher_;
     std::unique_ptr<ThreadPool> thread_pool_;
 };
 
