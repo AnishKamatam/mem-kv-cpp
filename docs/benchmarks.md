@@ -195,29 +195,32 @@ We use a custom C++ benchmarking tool (`src/tools/benchmark.cpp`) that:
 }
 ```
 
-## Comparison with Redis
+## Context: Comparison with Redis
 
-**Redis (localhost, single-threaded):**
+**Note:** This is not a direct performance comparison. Redis is a production-grade, feature-rich system optimized for different use cases. Our implementation is a specialized ML-optimized store with different trade-offs.
+
+**Redis (localhost, single-threaded, no pipelining):**
 - SET operations: ~100,000 RPS
 - GET operations: ~120,000 RPS
 
-**Our Implementation (ML-Optimized):**
+**Our Implementation (multi-threaded, with micro-batching):**
 - SET operations: ~162,339 RPS (with batching)
 - GET operations: ~162,339 RPS
 - MGET operations: ~157,303 RPS (multi-key)
 
-**Analysis:**
-- Our implementation achieves **162% of Redis SET performance** (with batching)
-- ML-specific optimizations (TTL, batching, MGET) provide advantages for inference workloads
-- Demonstrates that specialized architecture can exceed general-purpose performance for specific use cases
+**What This Demonstrates:**
+- Multi-threading + batching can achieve high throughput for write-heavy workloads
+- ML-specific optimizations (TTL caching, micro-batching, MGET) are effective for inference workloads
+- Specialized architectures can achieve high performance for specific use cases
+- **Not a claim of superiority:** Redis with pipelining/clustering would perform differently, and Redis offers many features we don't (replication, persistence modes, data structures, etc.)
 
 ## Future Optimizations
 
-1. **Zero-Copy Networking:** Use `sendfile()` or memory-mapped I/O
-2. **Lock-Free Data Structures:** Replace mutexes with atomic operations where possible
-3. **NUMA Awareness:** Pin threads to specific CPU cores
-4. **Custom Memory Allocator:** Reduce allocation overhead
-5. **Batch Writes:** Group multiple operations in single WAL entry
+1. **Zero-Copy Networking:** Use `sendfile()` or memory-mapped I/O for large responses
+2. **Lock-Free Data Structures:** Replace mutexes with atomic operations where possible (e.g., lock-free hash tables)
+3. **NUMA Awareness:** Pin threads to specific CPU cores for better cache locality
+4. **Custom Memory Allocator:** Reduce allocation overhead (e.g., arena allocators, object pools)
+5. **Batch WAL Entries:** Currently we batch command processing (50 commands = 1 lock acquisition), but each command still writes its own WAL line. Future: group multiple operations into a single WAL entry to reduce I/O overhead further
 
 ## Conclusion
 
@@ -234,5 +237,5 @@ The mem-kv-cpp server achieves **~162,000 RPS** through:
 - **Consistency:** P99 < 1ms
 - **Efficiency:** Batch-optimized I/O with 50x reduction in system calls
 
-This demonstrates that careful concurrency design combined with ML-specific optimizations can yield dramatic performance improvements, achieving 162% of Redis performance for write-heavy workloads while providing specialized features for ML infrastructure.
+This demonstrates that careful concurrency design (sharded locking, thread pools) combined with ML-specific optimizations (micro-batching, TTL caching, MGET) can yield high performance for specialized workloads. The system achieves ~162,000 RPS through multi-threading and batching, while providing ML-focused features like TTL-aware caching and latency histograms.
 
