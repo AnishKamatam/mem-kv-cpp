@@ -61,3 +61,6 @@ mem-kv-server.exe
 # Testing
 Testing/
 
+# Runtime data
+data/
+*.log
