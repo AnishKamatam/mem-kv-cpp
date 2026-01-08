@@ -57,7 +57,7 @@ std::string get(const std::string& key) {
 
 **Lock Scope:** Only the specific shard containing the key is locked. Other shards remain accessible to other threads.
 
-**Lock Duration:** Minimal—just long enough to perform the hash map lookup.
+**Lock Duration:** Minimal - just long enough to perform the hash map lookup.
 
 ### Coarse-Grained Locking: Journal Writes
 
@@ -226,8 +226,8 @@ void compact() {
 
 **Potential Deadlock Scenario:**
 ```
-Thread A: Locks shard[0] → tries to lock journal_mtx_
-Thread B: Locks journal_mtx_ → tries to lock shard[0]
+Thread A: Locks shard[0] -> tries to lock journal_mtx_
+Thread B: Locks journal_mtx_ -> tries to lock shard[0]
 ```
 
 **Prevention Strategy:**
@@ -267,8 +267,8 @@ class WriteBatcher {
 ```
 
 **Performance Impact:**
-- **Lock Contention:** 50 writes → 1 lock acquisition (50x reduction)
-- **System Calls:** 50 WAL writes → 1 batch write (50x reduction)
+- **Lock Contention:** 50 writes -> 1 lock acquisition (50x reduction)
+- **System Calls:** 50 WAL writes -> 1 batch write (50x reduction)
 - **Throughput:** 2-5x improvement for write-heavy workloads
 - **Latency:** <10ms batching delay (acceptable for feature stores)
 

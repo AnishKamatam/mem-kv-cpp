@@ -144,10 +144,10 @@ The final state is correctly restored, even though intermediate states (user_1="
 Over time, the WAL grows indefinitely:
 ```
 SET key1 value1
-SET key1 value2    ← key1 updated
-SET key1 value3    ← key1 updated again
+SET key1 value2    (key1 updated)
+SET key1 value3    (key1 updated again)
 SET key2 value4
-SET key1 value5    ← key1 updated yet again
+SET key1 value5    (key1 updated yet again)
 ```
 
 Even though `key1` only has one current value (`value5`), the log contains 4 lines for it.
@@ -209,11 +209,11 @@ void compact() {
 **Example:**
 ```
 Before: wal.log (200,000 lines, 5MB)
-        wal.log.tmp (200,006 lines, 5MB)  ← snapshot
+        wal.log.tmp (200,006 lines, 5MB)  (snapshot)
 
 rename("wal.log.tmp", "wal.log")
 
-After:  wal.log (200,006 lines, 5MB)  ← compacted
+After:  wal.log (200,006 lines, 5MB)  (compacted)
 ```
 
 ### Automatic Compaction

@@ -13,7 +13,7 @@ This document explains how the mem-kv-cpp system addresses critical challenges i
 - Example: A recommendation system receives the same user context multiple times within an hour
 
 **Real-World Impact:**
-- **Cost:** 1000 redundant predictions/hour × $0.005 = $5/hour = $43,800/year
+- **Cost:** 1000 redundant predictions/hour * $0.005 = $5/hour = $43,800/year
 - **Latency:** GPU inference: 10-50ms vs Cache lookup: <1ms
 - **Scalability:** Cache hits reduce GPU load by 60-90% in production systems
 
@@ -52,7 +52,7 @@ GET model:user:123:prediction
 **Performance Impact:**
 - **Cache Hit Rate:** 60-90% in production ML systems
 - **Cost Reduction:** 60-90% reduction in GPU compute costs
-- **Latency Improvement:** 10-50ms → <1ms (10-50x faster)
+- **Latency Improvement:** 10-50ms -> <1ms (10-50x faster)
 
 ## 2. High-Throughput Feature Ingestion (Micro-batching)
 
@@ -96,8 +96,8 @@ class WriteBatcher {
 - **Vectorized I/O:** 50 WAL writes = 1 system call (50x reduction)
 
 **Performance Impact:**
-- **Lock Contention:** Reduced by 50x (50 writes → 1 lock)
-- **System Calls:** Reduced by 50x (50 writes → 1 syscall)
+- **Lock Contention:** Reduced by 50x (50 writes -> 1 lock)
+- **System Calls:** Reduced by 50x (50 writes -> 1 syscall)
 - **Throughput:** 2-5x improvement for write-heavy workloads
 - **Latency:** Minimal impact (<10ms batching delay acceptable for features)
 
@@ -185,7 +185,7 @@ struct LatencyHistogram {
 
 **Real-World Scenario:**
 - Recommendation model needs 20 user features
-- 20 GET requests × 2ms = 40ms network overhead
+- 20 GET requests * 2ms = 40ms network overhead
 - GPU inference: 10ms
 - **Total: 50ms (80% spent on network!)**
 
@@ -207,10 +207,10 @@ std::vector<std::string> mget(const std::vector<std::string>& keys) {
 - **Missing Key Handling:** Returns (nil) for missing keys
 
 **Performance Impact:**
-- **Network Latency:** 10 requests → 1 request (10x reduction)
-- **Total Latency:** 40ms → 4ms (10x improvement)
+- **Network Latency:** 10 requests -> 1 request (10x reduction)
+- **Total Latency:** 40ms -> 4ms (10x improvement)
 - **Throughput:** 10x improvement for multi-key reads
-- **Example:** 100 GETs = 370ms → 1 MGET = 4ms (92x faster)
+- **Example:** 100 GETs = 370ms -> 1 MGET = 4ms (92x faster)
 
 ## System Performance Characteristics
 
@@ -294,9 +294,9 @@ std::vector<std::string> mget(const std::vector<std::string>& keys) {
 4. Model inference proceeds with complete feature vector
 
 **Performance:**
-- Network round-trips: 20 → 1 (20x reduction)
-- Feature retrieval latency: 40ms → 4ms (10x improvement)
-- Total pipeline latency: 50ms → 14ms (3.5x improvement)
+- Network round-trips: 20 -> 1 (20x reduction)
+- Feature retrieval latency: 40ms -> 4ms (10x improvement)
+- Total pipeline latency: 50ms -> 14ms (3.5x improvement)
 
 ## Conclusion
 

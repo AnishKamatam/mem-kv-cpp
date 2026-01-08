@@ -51,38 +51,38 @@ Let's trace what happens when a client sends `SET model:user:123 prediction EX 3
 
 ```
 1. Client: echo "SET model:user:123 prediction EX 3600" | nc localhost 8080
-   ↓
+   |
 2. Server::run() [Main Thread]
    - accept() blocks until client connects
    - Receives client_socket file descriptor
    - Enqueues socket to ThreadPool
-   ↓
+   |
 3. ThreadPool::worker_loop() [Worker Thread]
    - Wakes up from condition_variable wait
    - Pops client_socket from queue
    - Creates Connection object with WriteBatcher reference
-   ↓
+   |
 4. Connection::handle() [Worker Thread]
    - recv() reads bytes: "SET model:user:123 prediction EX 3600\n"
    - Calls Parser::parse() to tokenize
-   ↓
+   |
 5. Parser::parse() [Worker Thread]
    - Creates ParsedCommand{type=SET, key="model:user:123", value="prediction", ttl_seconds=3600}
    - Returns structured command object
-   ↓
+   |
 6. Connection::handle() [Worker Thread]
    - Detects SET command (write operation)
    - Routes to WriteBatcher::add_to_batch()
    - Immediately sends "OK\n" response (non-blocking)
-   ↓
+   |
 7. WriteBatcher::add_to_batch() [Worker Thread]
    - Adds command to current_batch_
    - If batch size >= 50, triggers flush_to_store()
-   ↓
+   |
 8. WriteBatcher::flush_to_store() [Worker Thread or Background Thread]
    - Records batch statistics (Metrics::record_batch())
    - For each command in batch:
-     ↓
+     |
 9. KVStore::Impl::set() [Worker Thread]
    - Computes shard index: hash("model:user:123") % 16 = shard_idx
    - Acquires lock on shards[shard_idx].mtx
@@ -92,12 +92,12 @@ Let's trace what happens when a client sends `SET model:user:123 prediction EX 3
    - Acquires journal_mtx_ lock
    - Writes "SET model:user:123 prediction EX 3600\n" to journal_ stream
    - Releases journal lock
-   ↓
+   |
 10. Background Flusher Thread [Separate Thread]
     - Every 100ms, acquires journal_mtx_ lock
     - Calls journal_.flush() to force OS write
     - Releases lock
-    ↓
+   |
 11. Operating System
     - Buffers the write in page cache
     - Eventually syncs to physical disk
@@ -131,8 +131,8 @@ size_t get_shard_index(const std::string& key) {
 - **Load Distribution:** `std::hash` provides uniform distribution across shards
 
 **Example:**
-- Thread A writes `SET user_1 value` → hash("user_1") % 16 = 3 → locks shard[3]
-- Thread B writes `SET user_2 value` → hash("user_2") % 16 = 7 → locks shard[7]
+- Thread A writes `SET user_1 value` -> hash("user_1") % 16 = 3 -> locks shard[3]
+- Thread B writes `SET user_2 value` -> hash("user_2") % 16 = 7 -> locks shard[7]
 - **Result:** Both operations proceed in parallel with zero contention
 
 ## Thread Lifecycle
@@ -216,12 +216,12 @@ struct CacheEntry {
 ### Write Batching Flow
 
 ```
-Client SET → WriteBatcher → Batch Buffer (up to 50 commands)
-                              ↓
+Client SET -> WriteBatcher -> Batch Buffer (up to 50 commands)
+                              |
                          Background Thread (every 10ms)
-                              ↓
-                         Flush Batch → KVStore (single lock acquisition)
+                              |
+                         Flush Batch -> KVStore (single lock acquisition)
 ```
 
-**Performance Impact:** 50 writes → 1 lock acquisition = 50x reduction in contention.
+**Performance Impact:** 50 writes -> 1 lock acquisition = 50x reduction in contention.
 

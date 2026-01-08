@@ -161,7 +161,7 @@ We use a custom C++ benchmarking tool (`src/tools/benchmark.cpp`) that:
 
 **Cache Hit Rate:** 60-90% in production ML workloads
 - **Cost Reduction:** 60-90% fewer GPU inference calls
-- **Latency Improvement:** 10-50ms (GPU) → <1ms (cache)
+- **Latency Improvement:** 10-50ms (GPU) -> <1ms (cache)
 
 ### Micro-Batching Performance
 
@@ -174,8 +174,8 @@ We use a custom C++ benchmarking tool (`src/tools/benchmark.cpp`) that:
 ### MGET Performance
 
 **Multi-Key Retrieval:**
-- **Network Round-Trips:** 10 keys → 1 request (10x reduction)
-- **Latency:** 40ms (10 GETs) → 4ms (1 MGET) (10x improvement)
+- **Network Round-Trips:** 10 keys -> 1 request (10x reduction)
+- **Latency:** 40ms (10 GETs) -> 4ms (1 MGET) (10x improvement)
 - **Throughput:** 10-20x improvement for feature vector retrieval
 
 ### Latency Histogram Metrics
